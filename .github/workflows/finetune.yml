@@ -1,0 +1,120 @@
+name: Fine-tune SLM
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'data/**'
+      - 'src/train.py'
+      - 'src/inference.py'
+      - 'requirements.txt'
+      - '.github/workflows/finetune.yml'
+  workflow_dispatch:
+    inputs:
+      epochs:
+        description: 'Number of training epochs'
+        required: false
+        default: '5'
+      learning_rate:
+        description: 'Learning rate'
+        required: false
+        default: '5e-5'
+
+jobs:
+  finetune:
+    name: Train & Evaluate
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fine-tune DistilGPT2
+        run: |
+          python src/train.py \
+            --data data/hello_world.jsonl \
+            --output output/model \
+            --epochs ${{ github.event.inputs.epochs || '5' }} \
+            --lr ${{ github.event.inputs.learning_rate || '5e-5' }} \
+            --batch-size 4
+
+      - name: Run inference comparison
+        run: python src/inference.py --finetuned output/model --base distilgpt2
+
+      - name: Generate HTML report
+        run: python src/generate_report.py
+
+      - name: Upload trained model artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: finetuned-model
+          path: output/model/
+          retention-days: 30
+
+      - name: Upload training summary
+        uses: actions/upload-artifact@v4
+        with:
+          name: training-results
+          path: |
+            output/training_summary.json
+            output/inference_results.json
+          retention-days: 30
+
+      - name: Upload Pages report
+        uses: actions/upload-artifact@v4
+        with:
+          name: pages-report
+          path: docs/
+          retention-days: 7
+
+      - name: Show training summary
+        run: |
+          echo "## Training Results" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          cat output/training_summary.json >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Sample Inference" >> $GITHUB_STEP_SUMMARY
+          echo '```json' >> $GITHUB_STEP_SUMMARY
+          python -c "import json; results=json.load(open('output/inference_results.json')); [print(json.dumps(r, indent=2)) for r in results[:3]]" >> $GITHUB_STEP_SUMMARY
+          echo '```' >> $GITHUB_STEP_SUMMARY
+
+  deploy-pages:
+    name: Deploy to GitHub Pages
+    needs: finetune
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Download Pages report
+        uses: actions/download-artifact@v4
+        with:
+          name: pages-report
+          path: docs/
+
+      - name: Setup Pages
+        uses: actions/configure-pages@v4
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
