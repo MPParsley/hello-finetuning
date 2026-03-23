@@ -86,7 +86,7 @@ def main():
         logging_steps=5,
         save_strategy="epoch",
         report_to="none",
-        no_cuda=not torch.cuda.is_available(),
+        use_cpu=not torch.cuda.is_available(),
     )
 
     data_collator = DataCollatorForLanguageModeling(tokenizer=tokenizer, mlm=False)
